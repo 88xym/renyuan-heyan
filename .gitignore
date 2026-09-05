@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# 待核验 PDF（含个人信息，默认不入库）
+inputfile/*.pdf
+
+# 核验报告产物
+output/*.xlsx
+output/*.json
+
+# 编辑器/系统
+.vscode/*.code-workspace
+.idea/
+.DS_Store
+Thumbs.db

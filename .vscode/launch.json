@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "核验 inputfile 全部 PDF",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "核验指定 PDF",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": ["inputfile/样例_填写错误.pdf"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "生成样例 PDF",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/tools/make_sample.py",
+            "console": "integratedTerminal"
+        }
+    ]
+}
