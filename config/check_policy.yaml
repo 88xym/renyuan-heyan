@@ -1,0 +1,31 @@
+# 核验策略配置
+#
+# handwriting（手写体检查策略）
+#   lenient = 宽松：手写内容不苛求，OCR 识别异常不直接判错
+#   strict  = 严格
+#
+# zero_vs_oh（数字 0 与字母 O）
+#   ignore    = 不区分（手写体常见混淆，视为一致）
+#   distinguish = 严格区分
+#
+# unclear_signature（签名/手写痕迹看不清）
+#   pass = 视为已签署、OK
+#   fail = 判为缺失
+#
+# empty_field（字段完全空白，无任何书写痕迹）
+#   fail = 仍然判为缺失（空白 ≠ 看不清）
+#   pass = 也放过
+
+handwriting: lenient
+zero_vs_oh: ignore
+unclear_signature: pass
+empty_field: fail
+
+# 宽松模式下，以下情形自动降级为"建议核对"而非硬错误：
+# - 手写日期 OCR 格式异常（如 20267-18，疑似 2026/7/18）
+# - 模板选项是否手写划掉无法辨认（如"/蓝卡"未删选）
+# - 编号中 0/O、1/I/l 等易混字符差异
+lenient_downgrade:
+  - handwritten_date_ocr_anomaly
+  - template_option_strike_unclear
+  - confusable_chars_in_id

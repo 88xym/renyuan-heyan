@@ -27,6 +27,23 @@ DEFAULT_INPUT = PROJECT_ROOT / "inputfile"
 DEFAULT_OUTPUT = PROJECT_ROOT / "output"
 
 
+def is_scanned_pdf(pdf_path: str, sample_pages: int = 3) -> bool:
+    """快速检测 PDF 是否为扫描件（前 sample_pages 页文本层均为空）。"""
+    try:
+        import pymupdf
+        doc = pymupdf.open(pdf_path)
+        try:
+            total = min(sample_pages, doc.page_count)
+            for i in range(total):
+                if doc[i].get_text().strip():
+                    return False
+            return True
+        finally:
+            doc.close()
+    except Exception:
+        return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="人员核验 PDF 自动校验：提取打印内容并对照规则检查",
@@ -58,7 +75,10 @@ def main() -> int:
         for m in missing:
             print(f"[警告] 文件不存在，跳过: {m}", file=sys.stderr)
     else:
-        pdf_files = sorted(DEFAULT_INPUT.glob("*.pdf"))
+        # 同时匹配 .pdf 和 .PDF（Linux/macOS 大小写敏感），并用 set 去重（Windows 不区分大小写会重复）
+        pdf_files = sorted(
+            set(list(DEFAULT_INPUT.glob("*.pdf")) + list(DEFAULT_INPUT.glob("*.PDF")))
+        )
 
     if not pdf_files:
         print(f"[提示] 未找到 PDF 文件，请放入: {DEFAULT_INPUT}")
@@ -68,6 +88,9 @@ def main() -> int:
     results = []
     for pdf in pdf_files:
         print(f"正在核验: {pdf.name} ...")
+        if is_scanned_pdf(str(pdf)):
+            print(f"  [警告] {pdf.name} 疑似扫描件（无文本层），直接核验可能得到空结果。")
+            print(f"         建议先运行: python tools/ocr_pdf.py \"{pdf}\"")
         try:
             results.append(validate_pdf(str(pdf), rules))
         except Exception as exc:  # noqa: BLE001
