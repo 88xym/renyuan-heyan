@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import shutil
 import sys
+import time
 from pathlib import Path
 
 from pdf_checker.report import print_console, write_excel, write_json
@@ -43,16 +45,55 @@ def get_dir_size(path: Path) -> int:
     return total
 
 
+def cleanup_old_cache(days: int = 7) -> int:
+    """删除指定天数前的 OCR 缓存子目录，返回删除的目录数。
+
+    OCR 缓存按 PDF 文件名存放在 .cache/ocr/<pdf名>/ 下，
+    按子目录的修改时间判断是否过期，过期则整个子目录删除。
+    """
+    ocr_dir = CACHE_DIR / "ocr"
+    if not ocr_dir.exists():
+        return 0
+    cutoff = time.time() - days * 86400
+    deleted = 0
+    for subdir in sorted(ocr_dir.iterdir()):
+        if not subdir.is_dir():
+            continue
+        try:
+            if subdir.stat().st_mtime < cutoff:
+                shutil.rmtree(subdir, ignore_errors=True)
+                deleted += 1
+                print(f"  已删除: {subdir.name}")
+        except OSError as exc:
+            print(f"  删除失败 {subdir.name}: {exc}")
+    return deleted
+
+
 def check_cache_size() -> None:
-    """检查缓存目录大小，超过阈值时打印删除提示。"""
+    """检查缓存目录大小，超过阈值时交互式询问是否删除 7 天前的缓存。"""
     if not CACHE_DIR.exists():
         return
     size_mb = get_dir_size(CACHE_DIR) / (1024 * 1024)
-    if size_mb > CACHE_WARN_MB:
-        print(f"[警告] 缓存目录 {CACHE_DIR} 已占用 {size_mb:.1f} MB，超过 {CACHE_WARN_MB} MB。")
-        print(f"       OCR 缓存可安全删除，删除后下次运行对应 PDF 会重新 OCR。")
-        print(f"       Windows 删除命令: rmdir /s /q .cache")
+    if size_mb <= CACHE_WARN_MB:
+        return
+    print(f"[警告] 缓存目录 {CACHE_DIR} 已占用 {size_mb:.1f} MB，超过 {CACHE_WARN_MB} MB。")
+    print(f"       OCR 缓存可安全删除，删除后下次运行对应 PDF 会重新 OCR。")
+    try:
+        choice = input("       是否删除 7 天前的缓存？(y/N): ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
         print()
+        return
+    if choice in ("y", "yes"):
+        print("       正在清理 7 天前的缓存...")
+        deleted = cleanup_old_cache(days=7)
+        if deleted > 0:
+            new_size = get_dir_size(CACHE_DIR) / (1024 * 1024)
+            print(f"       清理完成：删除 {deleted} 个缓存目录，当前缓存 {new_size:.1f} MB。")
+        else:
+            print("       没有 7 天前的缓存可删除。")
+    else:
+        print("       已跳过缓存清理。")
+    print()
 
 
 def is_scanned_pdf(pdf_path: str, sample_pages: int = 3) -> bool:
