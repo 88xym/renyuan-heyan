@@ -25,6 +25,34 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_RULES = PROJECT_ROOT / "config" / "rules.yaml"
 DEFAULT_INPUT = PROJECT_ROOT / "inputfile"
 DEFAULT_OUTPUT = PROJECT_ROOT / "output"
+CACHE_DIR = PROJECT_ROOT / ".cache"
+CACHE_WARN_MB = 500  # 缓存目录超过此大小（MB）时提示删除
+
+
+def get_dir_size(path: Path) -> int:
+    """递归计算目录总大小（字节），忽略无法读取的文件。"""
+    total = 0
+    if not path.exists():
+        return 0
+    for f in path.rglob("*"):
+        if f.is_file():
+            try:
+                total += f.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def check_cache_size() -> None:
+    """检查缓存目录大小，超过阈值时打印删除提示。"""
+    if not CACHE_DIR.exists():
+        return
+    size_mb = get_dir_size(CACHE_DIR) / (1024 * 1024)
+    if size_mb > CACHE_WARN_MB:
+        print(f"[警告] 缓存目录 {CACHE_DIR} 已占用 {size_mb:.1f} MB，超过 {CACHE_WARN_MB} MB。")
+        print(f"       OCR 缓存可安全删除，删除后下次运行对应 PDF 会重新 OCR。")
+        print(f"       Windows 删除命令: rmdir /s /q .cache")
+        print()
 
 
 def is_scanned_pdf(pdf_path: str, sample_pages: int = 3) -> bool:
@@ -60,6 +88,9 @@ def main() -> int:
         "--outdir", default=str(DEFAULT_OUTPUT), help="报告输出目录"
     )
     args = parser.parse_args()
+
+    # 启动时检查缓存目录大小，超过阈值提示删除
+    check_cache_size()
 
     rules_path = Path(args.rules)
     if not rules_path.exists():
