@@ -45,7 +45,11 @@ python main.py inputfile/样例_填写错误.pdf
 ```
 
 > **Windows 一键运行**：双击项目根目录 `开始核验.bat` 即可。
-> 流程：自动 OCR（扫描件无缓存时）→ main.py 字段级核验（output 下 Excel/JSON）→ auto_verify.py 按第1页统计表定位每人并生成每人一页 PDF 核验报告（output/`<公司简称>-<日期>.pdf`）。
+> 流程：自动 OCR（扫描件无缓存时）→ main.py 字段级核验（output 下 Excel/JSON）→ auto_verify.py 生成每人一页 PDF 核验报告（output/`<公司简称>-<日期>.pdf`）。
+>
+> **一包公司简称自动识别**：从申请人个人资料页"承判公司名称"字段提取（如"长安保安服务有限公司"→`长安保安`、"中交天航南方交通建设有限公司"→`中交天航`），同步用于输出文件名与 PDF 标题；OCR 识别为噪声（不含公司特征词）时回退 organization.yaml 默认一包别名。可用 `--company 名称` 覆盖。
+>
+> **两种文件结构均支持**：①第1页为人员统计表（按表定位每人，如土金批次）；②无统计表、第1页直接为个人资料页（如联合体文件，按"申请人个人资料"页切分，姓名取资料页"（中文）XXX"字段）。
 > 该 bat 为 GBK(ANSI)+CRLF 编码，与中文 Windows 的 cmd 兼容。
 > 如需修改提示文字，请改 `tools/bat_source.bat`（UTF-8）后运行
 > `python tools/rebuild_bat.py` 重建，不要直接编辑 `开始核验.bat`。

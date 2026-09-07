@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import datetime
 import json
 import re
@@ -83,6 +84,52 @@ def norm_text(text: str) -> str:
     return text
 
 
+# 公司名特征词（用于甄别"承判公司名称"字段是否为可信公司名，过滤 OCR 噪声）
+_COMPANY_WORDS = ["有限", "公司", "建筑", "工程", "建设", "集团", "实业",
+                  "发展", "国际", "澳门", "承包", "劳务", "服务", "装饰", "装修"]
+
+
+def extract_company_name(raw: str) -> str:
+    """校验承判公司字段：含公司特征词才视为可信公司名，否则视为 OCR 噪声丢弃。"""
+    raw = (raw or "").strip().strip("：:：: \t")
+    if not raw:
+        return ""
+    if any(w in raw for w in _COMPANY_WORDS):
+        return raw
+    return ""
+
+
+def company_short_name(full_name: str, org: dict | None = None) -> str:
+    """取公司简称：优先匹配分包层级配置的 name/alias，否则去尾缀取前缀。
+
+    例：中交天航南方交通建设有限公司 → 中交天航（命中 hierarchy 一包 alias）
+        土金建筑工程有限公司 → 土金（去尾缀取前缀）
+    """
+    full = (full_name or "").strip()
+    if not full:
+        return ""
+    # 1. 匹配 organization.yaml 分包层级（名称或别名包含关系）
+    if org:
+        for level in org.get("hierarchy", []):
+            cands = [level.get("name", "")] + list(level.get("alias", []) or [])
+            for cand in cands:
+                if cand and (cand in full or full in cand):
+                    aliases = level.get("alias", []) or []
+                    # 优先中文别名（避免 CHEC 这类英文简称出现在文件名）
+                    for a in aliases:
+                        if re.search(r"[\u4e00-\u9fa5]", a):
+                            return a
+                    return aliases[0] if aliases else level.get("name", cand)
+    # 2. 去尾缀取前缀
+    for suffix in ["（澳门）", "(澳门)", "建筑工程有限公司", "工程有限公司",
+                   "建筑有限公司", "有限责任公司", "有限公司", "责任公司"]:
+        if full.endswith(suffix):
+            full = full[: -len(suffix)]
+            break
+    m = re.match(r"[\u4e00-\u9fa5]{2,4}", full)
+    return m.group(0) if m else (full[:4] if full else "")
+
+
 def name_variants(name: str) -> set[str]:
     """生成姓名的繁简变体集合（如 翟發六 → {翟發六, 翟发六}）。"""
     variants = {""}
@@ -100,16 +147,17 @@ _PAGE_CLASSIFIERS = [
     ("contractor_decl", ["承判商声明"]),
     ("id_authenticity", ["真伪记录", "查核智能身份证"]),
     ("contract", ["合约", "合同"]),
-    ("labor_police_form", ["逗留许可.*申请表", "申请表编号", "申睛表"]),
+    ("labor_police_form", ["逗留许可.*申请表", "申请表编号", "申睛表", r"治安警察局[\s\S]{0,300}?逗留"]),
     ("labor_receipt", ["收入收", "收据", "行街纸"]),
     ("labor_bureau", ["劳工事务局", "DSAL", "批示"]),
     ("id_copy", ["通行证", "职安", "外地雇员身份", "行街纸", "真伪记录"]),
 ]
 
 _ID_TYPE_RULES = [
-    ("macau_resident", ["永久性居民身份"]),
+    ("macau_resident", ["永久性居民身份", "澳门永久性居民"]),
     ("special_stay", ["特别逗留"]),
-    ("blue_card", ["外地雇员身份", "外地雇员身份"]),
+    # 蓝卡：含 OCR 形近字"候/雇"变体；声明页常写"蓝卡"字样
+    ("blue_card", ["外地雇员身份", "外地候员身份", "外地雇员", "外地候员", "蓝卡"]),
 ]
 
 # 六类资料名称（报告展示用）
@@ -263,7 +311,15 @@ def check_person(name: str, person_pages: list[tuple[int, str]], names_all: list
         required = ["personal_info", "applicant_decl", "contractor_decl", "id_copy"]
     elif id_type == "blue_card":
         required = ["personal_info", "applicant_decl", "contractor_decl",
-                    "id_copy", "labor_bureau", "labor_police_form", "labor_receipt"]
+                    "id_copy", "labor_bureau", "labor_police_form"]
+        # 蓝卡 或 行街纸+红印纸（二选一）：证件页含蓝卡字样则已满足
+        id_copy_text = "".join(t for n, t in person_pages if "id_copy" in classify_page(t))
+        has_blue_card_word = any(w in id_copy_text for w in
+                                 ["外地雇员身份", "外地候员身份", "蓝卡", "藍卡"])
+        if not has_blue_card_word and not has.get("labor_receipt"):
+            missing_docs.append(
+                "证件页未见蓝卡或行街纸+红印纸（蓝卡已颁发请补蓝卡复印件，"
+                "否则需补治安警察局行街纸收据）")
     else:
         required = ["personal_info", "applicant_decl", "contractor_decl", "id_copy"]
 
@@ -294,31 +350,13 @@ def check_person(name: str, person_pages: list[tuple[int, str]], names_all: list
             m = re.search(label, p_info_text)
             if m:
                 line = p_info_text[m.start():].split("\n", 1)[0]
-                rest = line[m.end():].strip(":： \t")
+                rest = line[len(label):].strip(":： \t")
                 if not rest:
                     issues.append(f"第{cat_pages['personal_info'][0]}页·个人资料页：{hint}空白")
 
-    # 2. 申请人声明签署日期
-    # 表单布局："签署日期：xxx" 在上、"申请人签署：xxx" 在下，直接搜"签署日期"字段
-    decl_text = "".join(t for n, t in person_pages if "applicant_decl" in classify_page(t))
-    if decl_text:
-        m = re.search(r"签署日期[:：]?\s*([^\n]*)", decl_text)
-        content = m.group(1).strip() if m else ""
-        filled = bool(content)
-        decl_page = cat_pages.get("applicant_decl", ["?"])[0]
-        if not filled:
-            issues.append(f"第{decl_page}页·申请人声明：签署日期完全空白（无任何书写痕迹）")
-        # 手写日期做宽松识别：有内容即视为已签（不苛求 20xx 格式）
-
-    # 3. 承判商声明两处签署日期
-    if contractor_text:
-        filled, _ = find_line_after(contractor_text, "承判商驻工地负责人", "日期")
-        c_page = cat_pages.get("contractor_decl", ["?"])[0]
-        if not filled:
-            issues.append(f"第{c_page}页·承判商声明：承判商驻工地负责人签署日期空白")
-        filled, _ = find_line_after(contractor_text, "资料核对员签署", "日期")
-        if not filled:
-            issues.append(f"第{c_page}页·承判商声明：资料核对员签署日期空白")
+    # 2/3. 申请人声明与承判商声明的签署日期
+    # 用户原则：手写签名/签日期做宽松识别，只要签名即可；扫描件 OCR 无法区分
+    # "手写有字但识别不出"与"真空白"，故不对手写签署日期报问题（页面存在即视为已签）。
 
     # 4. 批示编号一致性（蓝卡：申请表 vs 劳工局批示）
     if id_type == "blue_card":
@@ -341,8 +379,8 @@ def check_person(name: str, person_pages: list[tuple[int, str]], names_all: list
         id_no = m.group(1).strip() if m else ""
         m = re.search(r"职安[咭卡]编号（绿）[:：]*\s*([0-9A-Za-z/／-]+)", p_info_text)
         card_no = m.group(1).strip() if m else ""
-        m = re.search(r"承判公司名称[:：]*\s*([^\n]+)", p_info_text)
-        company = m.group(1).strip() if m else ""
+        m = re.search(r"承判公司名[称稱]?\s*[:：]?\s*([^\n]+)", p_info_text)
+        company = extract_company_name(m.group(1)) if m else ""
         m = re.search(r"（中文）([\u4e00-\u9fa5]+)", p_info_text)
         chinese_name = m.group(1) if m else ""
 
@@ -396,6 +434,7 @@ def check_person(name: str, person_pages: list[tuple[int, str]], names_all: list
         "consistency": consistency,
         "issues": issues,
         "conclusion": conclusion,
+        "company": company,
     }
 
 
@@ -435,21 +474,42 @@ def main() -> int:
     # 提取名单
     if args.names:
         names = [n.strip() for n in args.names.split(",") if n.strip()]
+        names_source = "命令行 --names 指定"
     else:
-        # 从第 1 页统计表提取名单，并剔除只在第 1 页出现（表头/联络人/跟进人等）的误提取
-        names = [n for n in extract_names(pages[0][1]) if is_name_on_pages(n, pages)]
+        # 第1页若是"申请人个人资料"页（无统计表结构，如联合体文件），跳过统计表提取
+        first_is_personal = "personal_info" in classify_page(pages[0][1])
+        if not first_is_personal:
+            # 从第 1 页统计表提取名单，并剔除只在第 1 页出现（表头/联络人/跟进人等）的误提取
+            names = [n for n in extract_names(pages[0][1]) if is_name_on_pages(n, pages)]
+            names_source = "第1页统计表"
+        else:
+            names = []
+            names_source = "无统计表"
+    # 无统计表/名单（如联合体文件第1页直接是个人资料）：按"申请人个人资料"页切分，
+    # 姓名从资料页"（中文）XXX"字段提取
     if not names:
-        print("[错误] 无法从第1页提取人员名单，请用 --names 指定", file=sys.stderr)
+        person_starts = [n for n, t in pages if "personal_info" in classify_page(t)]
+        if person_starts:
+            for s in person_starts:
+                t = next(t for n, t in pages if n == s)
+                m = re.search(
+                    r"[（(]\s*中文\s*[）)]\s*[:：]?\s*"
+                    r"([\u4e00-\u9fa5]{2,6}|[A-Za-z][A-Za-z ]{1,29})",
+                    t)
+                names.append(m.group(1).strip() if m else f"人员{s}")
+            names_source = "个人资料页切分（无第1页统计表）"
+    if not names:
+        print("[错误] 无法提取人员名单，请用 --names 指定", file=sys.stderr)
         return 1
-    print(f"人员名单: {', '.join(names)}")
+    print(f"人员名单({names_source}): {', '.join(names)}")
 
     # 逐人定位页面并核验
-    # 方案1：按"个人资料页"位置切分（每个人以个人资料页开头，顺序对应总汇表名单）；
+    # 方案1：按"个人资料页"位置切分（每个人以个人资料页开头，顺序对应名单）；
     # 方案2（回退）：按姓名首次出现页切分。
     people = []
     ranges = None
-    person_starts = [n for n, t in pages[1:] if "personal_info" in classify_page(t)]
-    if len(person_starts) == len(names):
+    person_starts = [n for n, t in pages if "personal_info" in classify_page(t)]
+    if person_starts and len(person_starts) == len(names):
         ranges = []
         for i, start in enumerate(person_starts):
             end = (person_starts[i + 1] - 1) if i + 1 < len(person_starts) else pages[-1][0]
@@ -486,14 +546,30 @@ def main() -> int:
         print("[错误] 无人通过核验", file=sys.stderr)
         return 1
 
-    # 公司简称
+    # 公司简称（一包）：
+    # 1) --company 显式指定优先；
+    # 2) 否则从各人"申请人个人资料页 → 承判公司名称"字段提取（多数一致值），取简称；
+    # 3) 提取不到/不可信则回退 organization.yaml 的一包简称。
+    org = None
+    try:
+        org = yaml.safe_load(ORGANIZATION_CFG.read_text(encoding="utf-8"))
+    except Exception:
+        pass
     company = args.company
+    company_source = "命令行 --company 指定"
+    if not company:
+        raw_companies = [p.get("company", "") for p in people if p.get("company")]
+        if raw_companies:
+            most_common = collections.Counter(raw_companies).most_common(1)[0][0]
+            company = company_short_name(most_common, org)
+            company_source = f"个人资料页承判公司字段（{most_common}）"
     if not company:
         try:
-            org = yaml.safe_load(ORGANIZATION_CFG.read_text(encoding="utf-8"))
             company = org["hierarchy"][1]["alias"][0]
         except Exception:
             company = "未命名"
+        company_source = "organization.yaml 一包别名（字段未识别到可信公司名）"
+    print(f"一包简称: {company}（来源：{company_source}）")
     report_date = args.date or datetime.date.today().strftime("%Y-%m-%d")
     date_compact = report_date.replace("-", "")
 
