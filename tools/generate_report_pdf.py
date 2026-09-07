@@ -233,14 +233,20 @@ def build_person_page(p: dict, idx: int, total: int, company_short: str,
     story.append(Spacer(1, 6))
 
     story.append(Paragraph("四、核验结论", H2))
-    concl_data = [[f"该人员资料存在 {len(p['issues'])} 项需补正问题，请退回分包商补正后重新提交。"]]
+    if p["conclusion"] == "通过":
+        concl_text = "该人员资料核验通过：支撑资料齐全且填写一致，无需补正。"
+        bg, fg, box = "#eafaf1", "#1e8449", "#27ae60"
+    else:
+        concl_text = f"该人员资料存在 {len(p['issues'])} 项需补正问题，请退回分包商补正后重新提交。"
+        bg, fg, box = "#fdebd0", "#7e5109", "#d4ac0d"
+    concl_data = [[concl_text]]
     concl_table = Table(concl_data, colWidths=[164*mm])
     concl_table.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (-1, -1), FONT_BOLD),
         ("FONTSIZE", (0, 0), (-1, -1), 10),
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fdebd0")),
-        ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#7e5109")),
-        ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#d4ac0d")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(bg)),
+        ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor(fg)),
+        ("BOX", (0, 0), (-1, -1), 1, colors.HexColor(box)),
         ("LEFTPADDING", (0, 0), (-1, -1), 8),
         ("TOPPADDING", (0, 0), (-1, -1), 6),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 6),

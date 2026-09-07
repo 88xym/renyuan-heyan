@@ -312,10 +312,18 @@ def check_person(name: str, person_pages: list[tuple[int, str]], names_all: list
     elif id_type == "blue_card":
         required = ["personal_info", "applicant_decl", "contractor_decl",
                     "id_copy", "labor_bureau", "labor_police_form"]
-        # 蓝卡 或 行街纸+红印纸（二选一）：证件页含蓝卡字样则已满足
+        # 蓝卡 或 行街纸+红印纸（二选一）：证件页含蓝卡字样则已满足。
+        # OCR 对蓝卡卡面"外地雇员身份识别证"识别不稳定
+        # （如"外地丽具身份别晶"、"外地身分刷"），且葡/英文卡名常无空格
+        # （NAORESIDENTE），故用宽正则 + 去空格英文 + 声明页"蓝卡xxxx"字样佐证。
         id_copy_text = "".join(t for n, t in person_pages if "id_copy" in classify_page(t))
-        has_blue_card_word = any(w in id_copy_text for w in
-                                 ["外地雇员身份", "外地候员身份", "蓝卡", "藍卡"])
+        decl_text = "".join(t for n, t in person_pages if "applicant_decl" in classify_page(t))
+        check_text = id_copy_text + decl_text
+        compact = re.sub(r"\s+", "", check_text)
+        has_blue_card_word = (
+            re.search(r"外地[^\n]{0,4}?(身份|身分)", check_text) is not None
+            or any(w in compact for w in ["蓝卡", "藍卡", "NAORESIDENTE", "NONRESIDENT"])
+        )
         if not has_blue_card_word and not has.get("labor_receipt"):
             missing_docs.append(
                 "证件页未见蓝卡或行街纸+红印纸（蓝卡已颁发请补蓝卡复印件，"
