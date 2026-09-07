@@ -159,8 +159,9 @@ def repair_short_name(name: str, en_name: str, text: str) -> str:
 
 
 # 公司名特征词（用于甄别"承判公司名称"字段是否为可信公司名，过滤 OCR 噪声）
-_COMPANY_WORDS = ["有限", "公司", "建筑", "工程", "建设", "集团", "实业",
-                  "发展", "国际", "澳门", "承包", "劳务", "服务", "装饰", "装修"]
+_COMPANY_WORDS = ["有限", "公司", "建筑", "建築", "工程", "建设", "建设", "集团", "集團",
+                  "实业", "實業", "发展", "發展", "国际", "國際", "澳门", "澳門", "承包",
+                  "劳务", "勞務", "服务", "服務", "装饰", "裝修", "装饰", "装修"]
 
 
 def extract_company_name(raw: str) -> str:
@@ -195,8 +196,9 @@ def company_short_name(full_name: str, org: dict | None = None) -> str:
                             return a
                     return aliases[0] if aliases else level.get("name", cand)
     # 2. 去尾缀取前缀
-    for suffix in ["（澳门）", "(澳门)", "建筑工程有限公司", "工程有限公司",
-                   "建筑有限公司", "有限责任公司", "有限公司", "责任公司"]:
+    for suffix in ["（澳门）", "(澳门)", "建筑工程有限公司", "建筑工程有限公司",
+                   "工程有限公司", "建筑有限公司", "建築有限公司", "有限责任公司",
+                   "有限公司", "责任公司"]:
         if full.endswith(suffix):
             full = full[: -len(suffix)]
             break
@@ -454,7 +456,7 @@ def find_line_after(text: str, anchor: str, label: str) -> tuple[bool, str]:
 # 单人核验
 # ============================================================================
 def check_person(name: str, person_pages: list[tuple[int, str]], names_all: list[str],
-                 report_date: datetime.date) -> dict:
+                 report_date: datetime.date, org: dict | None = None) -> dict:
     """对一个人执行完整核验，返回报告数据结构。"""
     # 统一繁简归一化，后续全部关键词/正则匹配基于规范简体
     person_pages = [(n, norm_text(t)) for n, t in person_pages]
@@ -566,7 +568,10 @@ def check_person(name: str, person_pages: list[tuple[int, str]], names_all: list
         m = re.search(r"职安[咭卡]编号（绿）[:：]*\s*([0-9A-Za-z/／-]+)", p_info_text)
         card_no = m.group(1).strip() if m else ""
         m = re.search(r"承判公司名[称稱]?\s*[:：]?\s*([^\n]+)", p_info_text)
-        company = extract_company_name(m.group(1)) if m else ""
+        company_raw = m.group(1).strip() if m else ""
+        # OCR 错别字修正（organization.yaml ocr_fix）先于特征词校验，避免错字被当噪声丢弃
+        ocr_fix = (org or {}).get("ocr_fix", {}) or {}
+        company = extract_company_name(ocr_fix.get(company_raw, company_raw))
         m = re.search(r"[（(]\s*中文\s*[）)]\s*[:：]?\s*([\u4e00-\u9fa5]+)", p_info_text)
         chinese_name = m.group(1) if m else ""
         m = re.search(r"[（(]\s*英文\s*[）)]\s*[:：]?\s*([A-Za-z][A-Za-z ]{0,39})", p_info_text)
@@ -786,12 +791,20 @@ def process_one_pdf(pdf_path: Path, args) -> int:
         return 1
     report_date = args.date or datetime.date.today().strftime("%Y-%m-%d")
     report_date_obj = datetime.date.fromisoformat(report_date)
+
+    # 分包层级配置（公司名修正/简称匹配用，提前加载供 check_person 使用）
+    org = None
+    try:
+        org = yaml.safe_load(ORGANIZATION_CFG.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+
     for name, (s, e) in zip(names, ranges):
         person_pages = [(n, t) for n, t in pages if s <= n <= e]
         if not person_pages:
             print(f"  [提示] 未找到 {name} 的页面，跳过")
             continue
-        people.append(check_person(name, person_pages, names, report_date_obj))
+        people.append(check_person(name, person_pages, names, report_date_obj, org))
         print(f"  已核验 {name}: 第{s}-{e}页, {len(people[-1]['issues'])} 项问题")
 
     if not people:
@@ -802,17 +815,18 @@ def process_one_pdf(pdf_path: Path, args) -> int:
     # 1) --company 显式指定优先；
     # 2) 否则从各人"申请人个人资料页 → 承判公司名称"字段提取（多数一致值），取简称；
     # 3) 提取不到/不可信则回退 organization.yaml 的一包简称。
-    org = None
-    try:
-        org = yaml.safe_load(ORGANIZATION_CFG.read_text(encoding="utf-8"))
-    except Exception:
-        pass
     company = args.company
     company_source = "命令行 --company 指定"
     if not company:
         raw_companies = [p.get("company", "") for p in people if p.get("company")]
         if raw_companies:
             most_common = collections.Counter(raw_companies).most_common(1)[0][0]
+            # OCR 错别字修正（organization.yaml ocr_fix 映射）
+            ocr_fix = (org or {}).get("ocr_fix", {}) or {}
+            fixed = ocr_fix.get(most_common)
+            if fixed:
+                print(f"  [修正] 承判公司字段 OCR '{most_common}' → '{fixed}'（organization.yaml ocr_fix）")
+                most_common = fixed
             company = company_short_name(most_common, org)
             company_source = f"个人资料页承判公司字段（{most_common}）"
     if not company:
@@ -821,6 +835,10 @@ def process_one_pdf(pdf_path: Path, args) -> int:
         except Exception:
             company = "未命名"
         company_source = "organization.yaml 一包别名（字段未识别到可信公司名）"
+        raw_txt = "、".join(dict.fromkeys(raw_companies)) if raw_companies else "(无)"
+        print(f"[警告] 承判公司字段识别不可信: {raw_txt}")
+        print("       已回退默认简称，报告文件名可能不准确；")
+        print("       如识别错误，请用 --company 指定正确公司简称后重跑。")
     print(f"一包简称: {company}（来源：{company_source}）")
     date_compact = report_date.replace("-", "")
 

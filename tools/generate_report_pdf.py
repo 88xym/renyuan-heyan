@@ -425,6 +425,22 @@ def main() -> int:
     outdir.mkdir(parents=True, exist_ok=True)
     date_compact = report_date.replace("-", "")
     out_path = outdir / f"{company_short}-{date_compact}.pdf"
+    if out_path.exists() and source_pdf:
+        # 同名报告已存在：读取其来源 PDF 标识，若非本次来源则改名（防不同批次互相覆盖）
+        try:
+            import pymupdf
+            prev = pymupdf.open(str(out_path))
+            prev_src = (prev.metadata or {}).get("subject", "") or ""
+            prev.close()
+            # pymupdf 对未设置的 subject 返回 "(unspecified)" 等占位串，视为无来源标识
+            if prev_src in ("", "unspecified", "(unspecified)"):
+                prev_src = ""
+            if prev_src and prev_src != f"source:{source_pdf}":
+                stem = Path(source_pdf).stem[:24]
+                out_path = outdir / f"{company_short}-{date_compact}-{stem}.pdf"
+                print(f"[提示] {company_short}-{date_compact}.pdf 已被其它来源占用，本次输出: {out_path.name}")
+        except Exception:  # noqa: BLE001
+            pass
 
     doc = SimpleDocTemplate(
         str(out_path),
@@ -433,6 +449,7 @@ def main() -> int:
         topMargin=34*mm, bottomMargin=15*mm,
         title=f"{company_short} 人员入场资料核验报告",
         author="人员核验系统",
+        subject=f"source:{source_pdf}",
     )
 
     story = []
