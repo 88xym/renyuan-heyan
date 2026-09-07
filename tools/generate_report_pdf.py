@@ -184,8 +184,108 @@ DEFAULT_DATA = {
 # ============================================================================
 # 生成单页
 # ============================================================================
+def build_summary_page(people: list, company_short: str, source_pdf: str,
+                       report_date: str, total_pages: int) -> list:
+    """生成第 1 页总结页：申报概况、名单明细、需补正问题汇总、核验说明。"""
+    story = []
+    story.append(Paragraph("人员入场资料核验报告", TITLE))
+    story.append(Paragraph(
+        f"一包：{company_short}　|　来源文件：{source_pdf}　|　报告日期：{report_date}", SUBTITLE))
+
+    # ---- 申报概况 ----
+    total = len(people)
+    passed = sum(1 for p in people if p.get("conclusion") == "通过")
+    need = total - passed
+    stat_data = [["申报总人数", f"{total} 人", "核验通过", f"{passed} 人", "需补正", f"{need} 人"]]
+    stat_table = Table(stat_data, colWidths=[26*mm, 30*mm, 26*mm, 30*mm, 26*mm, 30*mm])
+    stat_table.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, -1), FONT_REGULAR),
+        ("FONTSIZE", (0, 0), (-1, -1), 10),
+        ("FONTNAME", (0, 0), (0, 0), FONT_BOLD),
+        ("FONTNAME", (2, 0), (2, 0), FONT_BOLD),
+        ("FONTNAME", (4, 0), (4, 0), FONT_BOLD),
+        ("BACKGROUND", (1, 0), (1, 0), colors.HexColor("#eaf2f8")),
+        ("BACKGROUND", (3, 0), (3, 0), colors.HexColor("#eafaf1")),
+        ("BACKGROUND", (5, 0), (5, 0), colors.HexColor("#fdebd0")),
+        ("TEXTCOLOR", (3, 0), (3, 0), colors.HexColor("#1e8449")),
+        ("TEXTCOLOR", (5, 0), (5, 0), colors.HexColor("#7e5109")),
+        ("FONTNAME", (1, 0), (1, 0), FONT_BOLD),
+        ("FONTNAME", (3, 0), (3, 0), FONT_BOLD),
+        ("FONTNAME", (5, 0), (5, 0), FONT_BOLD),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("ALIGN", (1, 0), (1, 0), "CENTER"),
+        ("ALIGN", (3, 0), (3, 0), "CENTER"),
+        ("ALIGN", (5, 0), (5, 0), "CENTER"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    story.append(stat_table)
+    story.append(Spacer(1, 10))
+
+    # ---- 名单明细 ----
+    story.append(Paragraph("一、申报人员名单", H2))
+    rows = [["序号", "姓名", "证件类型", "支撑页面", "核验结论"]]
+    for i, p in enumerate(people, 1):
+        rows.append([str(i), p.get("name", ""), p.get("id_type", ""),
+                     p.get("pages", ""), p.get("conclusion", "")])
+    detail_table = Table(rows, colWidths=[12*mm, 32*mm, 58*mm, 34*mm, 28*mm], repeatRows=1)
+    detail_style = [
+        ("FONTNAME", (0, 0), (-1, -1), FONT_REGULAR),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a5276")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), FONT_BOLD),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (0, 1), (0, -1), "CENTER"),
+        ("ALIGN", (4, 1), (4, -1), "CENTER"),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f4f6f7")]),
+    ]
+    for r in range(1, len(rows)):
+        if rows[r][4] == "通过":
+            detail_style.append(("TEXTCOLOR", (4, r), (4, r), colors.HexColor("#1e8449")))
+            detail_style.append(("FONTNAME", (4, r), (4, r), FONT_BOLD))
+        else:
+            detail_style.append(("TEXTCOLOR", (4, r), (4, r), colors.HexColor("#b9770e")))
+            detail_style.append(("FONTNAME", (4, r), (4, r), FONT_BOLD))
+    detail_table.setStyle(TableStyle(detail_style))
+    story.append(detail_table)
+    story.append(Spacer(1, 10))
+
+    # ---- 需补正问题汇总 ----
+    story.append(Paragraph("二、需补正问题汇总", H2))
+    need_people = [p for p in people if p.get("conclusion") != "通过"]
+    if need_people:
+        for p in need_people:
+            issues = "；".join(p.get("issues", [])) if p.get("issues") else "（无具体问题描述）"
+            story.append(Paragraph(f"• {p.get('name', '')}（{p.get('id_type', '')}）：{issues}", ISSUE))
+    else:
+        story.append(Paragraph("全部人员核验通过，无需补正。", BODY))
+    story.append(Spacer(1, 8))
+
+    # ---- 核验说明 ----
+    story.append(Paragraph("三、核验说明", H2))
+    story.append(Paragraph(
+        "1. 本报告由程序自动核验生成（OCR 宽松识别），手写内容采用宽松判定（0/O 不区分、"
+        "签名看不清视为已签），主要核对打印内容。", BODY_SMALL))
+    story.append(Paragraph(
+        "2. 名单依据资料页『（中文）姓名』字段自动提取，单字名按上下文（英文名/文档内『姓氏+名』）"
+        "自动补全；如与实际申报不符请以纸质原件为准。", BODY_SMALL))
+    story.append(Paragraph(
+        "3. 分包关系：总包中国港湾 → 一包（承判公司名称字段）→ 二判/三判；承判商声明未填其他单位"
+        "属直属承判关系，免附合同。", BODY_SMALL))
+    story.append(Paragraph(
+        "4. 需补正人员请退回分包商整改后重新提交；各人核验详情见后续页面。", BODY_SMALL))
+    story.append(Spacer(1, 12))
+    story.append(Paragraph(f"第 1 / {total_pages} 页", ParagraphStyle(
+        "page", parent=BODY_SMALL, alignment=2, textColor=colors.grey)))
+    return story
+
+
 def build_person_page(p: dict, idx: int, total: int, company_short: str,
-                      source_pdf: str, report_date: str) -> list:
+                      source_pdf: str, report_date: str, total_pages: int) -> list:
     story = []
     story.append(Paragraph("人员入场资料核验报告", TITLE))
     story.append(Paragraph(
@@ -253,7 +353,7 @@ def build_person_page(p: dict, idx: int, total: int, company_short: str,
     ]))
     story.append(concl_table)
     story.append(Spacer(1, 8))
-    story.append(Paragraph(f"第 {idx} / {total} 页", ParagraphStyle(
+    story.append(Paragraph(f"第 {idx + 1} / {total_pages} 页", ParagraphStyle(
         "page", parent=BODY_SMALL, alignment=2, textColor=colors.grey)))
     return story
 
@@ -306,14 +406,18 @@ def main() -> int:
 
     story = []
     total = len(people)
+    total_pages = total + 1
+    # 第 1 页：总结页（申报概况、名单明细、需补正问题汇总）
+    story.extend(build_summary_page(people, company_short, source_pdf, report_date, total_pages))
+    story.append(PageBreak())
     for idx, p in enumerate(people, 1):
-        story.extend(build_person_page(p, idx, total, company_short, source_pdf, report_date))
+        story.extend(build_person_page(p, idx, total, company_short, source_pdf, report_date, total_pages))
         if idx < total:
             story.append(PageBreak())
 
     doc.build(story)
     print(f"PDF 已生成: {out_path}")
-    print(f"共 {total} 人，每人一页。")
+    print(f"共 {total} 人（含第 1 页总结页，共 {total_pages} 页）。")
     print(f"字体: {FONT_REGULAR} (自动探测)")
     return 0
 
