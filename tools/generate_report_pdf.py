@@ -446,7 +446,12 @@ def main() -> int:
         if idx < total:
             story.append(PageBreak())
 
-    doc.build(story, onFirstPage=draw_page_header, onLaterPages=draw_page_header)
+    try:
+        doc.build(story, onFirstPage=draw_page_header, onLaterPages=draw_page_header)
+    except PermissionError:
+        print(f"[错误] 无法写入报告文件（可能被 PDF 阅读器占用）: {out_path}", file=sys.stderr)
+        print("       请先关闭同名 PDF 后再重试。", file=sys.stderr)
+        return 1
     print(f"PDF 已生成: {out_path}")
     print(f"共 {total} 人（含第 1 页总结页，共 {total_pages} 页）。")
     print(f"字体: {FONT_REGULAR} (自动探测)")

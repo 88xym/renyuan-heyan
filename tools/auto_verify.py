@@ -656,21 +656,40 @@ def check_person(name: str, person_pages: list[tuple[int, str]], names_all: list
 # ============================================================================
 def main() -> int:
     parser = argparse.ArgumentParser(description="自动核验引擎：生成每人一页 PDF 核验报告")
-    parser.add_argument("--pdf", default=None, help="PDF 路径（默认 inputfile 下第一个 PDF）")
+    parser.add_argument("--pdf", default=None, help="PDF 路径（默认 inputfile 下全部 PDF，逐个生成报告）")
     parser.add_argument("--names", default=None, help="人员名单（逗号分隔，可选；默认从第1页自动提取）")
     parser.add_argument("--company", default=None, help="一包公司简称（默认从 organization.yaml 读取）")
     parser.add_argument("--date", default=None, help="报告日期 YYYY-MM-DD（默认当天）")
     args = parser.parse_args()
 
-    # 定位 PDF
+    # 定位待处理 PDF：--pdf 指定则仅处理该文件；否则遍历 inputfile 下全部 PDF
     if args.pdf:
-        pdf_path = Path(args.pdf)
+        pdf_paths = [Path(args.pdf)]
     else:
-        pdfs = sorted(PROJECT_ROOT.glob("inputfile/*.pdf")) + sorted(PROJECT_ROOT.glob("inputfile/*.PDF"))
-        if not pdfs:
+        # 同时匹配 .pdf 和 .PDF（Linux/macOS 大小写敏感），set 去重（Windows 不区分大小写）
+        pdf_paths = sorted(
+            set(list(PROJECT_ROOT.glob("inputfile/*.pdf")) + list(PROJECT_ROOT.glob("inputfile/*.PDF")))
+        )
+        if not pdf_paths:
             print("[错误] inputfile 下未找到 PDF", file=sys.stderr)
             return 1
-        pdf_path = pdfs[0]
+    failed = 0
+    for pdf_path in pdf_paths:
+        print(f"\n========== 处理: {pdf_path.name} ==========")
+        try:
+            rc = process_one_pdf(pdf_path, args)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[错误] {pdf_path.name} 处理异常: {exc}", file=sys.stderr)
+            rc = 1
+        if rc != 0:
+            failed += 1
+    if failed:
+        print(f"[完成] 共处理 {len(pdf_paths)} 个 PDF，{failed} 个失败。", file=sys.stderr)
+    return 0 if failed == 0 else 1
+
+
+def process_one_pdf(pdf_path: Path, args) -> int:
+    """处理单个 PDF：读取 OCR 缓存 → 提取名单 → 逐人核验 → JSON → PDF 报告。"""
     if not pdf_path.exists():
         print(f"[错误] PDF 不存在: {pdf_path}", file=sys.stderr)
         return 1
@@ -812,7 +831,7 @@ def main() -> int:
         "source_pdf": pdf_path.name,
         "people": people,
     }
-    data_json = OUTPUT_DIR / f"核验数据_{date_compact}.json"
+    data_json = OUTPUT_DIR / f"核验数据_{date_compact}_{pdf_stem}.json"
     data_json.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"核验数据: {data_json}")
 
