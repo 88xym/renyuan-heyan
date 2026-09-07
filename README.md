@@ -44,6 +44,11 @@ python main.py
 python main.py inputfile/样例_填写错误.pdf
 ```
 
+> **Windows 一键运行**：双击项目根目录 `开始核验.bat` 即可。
+> 该 bat 为 GBK(ANSI)+CRLF 编码，与中文 Windows 的 cmd 兼容。
+> 如需修改提示文字，请改 `tools/bat_source.bat`（UTF-8）后运行
+> `python tools/rebuild_bat.py` 重建，不要直接编辑 `开始核验.bat`。
+
 ## 扫描件 OCR
 
 如果 PDF 是扫描件（无文本层），先做 OCR：

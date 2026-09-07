@@ -1,0 +1,10 @@
+# bat 文件必须保持 GBK(ANSI) 编码 + CRLF 行尾
+# 禁止 git 做任何行尾/编码转换，否则 cmd.exe 解析会乱码
+/开始核验.bat -text
+
+# Python 源文件统一 UTF-8 + LF
+*.py text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.txt text eol=lf

@@ -1,16 +1,19 @@
 @echo off
-chcp 65001 >nul
+rem ========================================
+rem   Person Check - PDF Auto Verify
+rem   NOTE: this bat must be saved in ANSI/GBK
+rem ========================================
 cd /d "%~dp0"
 
 echo ========================================
-echo   äººå‘˜æ ¸éªŒ PDF è‡ªåŠ¨æ ¡éªŒ
+echo   ÈËÔ±ºËÑé PDF ×Ô¶¯Ğ£Ñé
 echo ========================================
 echo.
 
-REM æ£€æŸ¥è™šæ‹Ÿç¯å¢ƒ
+rem check virtual env
 if not exist ".venv\Scripts\python.exe" (
-    echo [é”™è¯¯] æœªæ‰¾åˆ°è™šæ‹Ÿç¯å¢ƒ .venv
-    echo è¯·å…ˆåœ¨é¡¹ç›®ç›®å½•æ‰§è¡Œ:
+    echo [´íÎó] Î´ÕÒµ½ĞéÄâ»·¾³ .venv
+    echo ÇëÏÈÔÚÏîÄ¿Ä¿Â¼Ö´ĞĞ:
     echo   python -m venv .venv
     echo   .venv\Scripts\pip install -r requirements.txt
     echo.
@@ -18,30 +21,31 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 
-REM ç¡®ä¿ inputfile ç›®å½•å­˜åœ¨
+rem ensure inputfile exists
 if not exist "inputfile" mkdir inputfile
 
-REM ç»Ÿè®¡ PDF æ•°é‡ï¼ˆWindows ä¸åŒºåˆ†å¤§å°å†™ï¼Œ*.pdf å³å¯åŒ¹é… .PDFï¼‰
+rem count pdf files
 set count=0
 for %%f in (inputfile\*.pdf) do set /a count+=1
 
 if %count%==0 (
-    echo [æç¤º] inputfile ç›®å½•ä¸‹æ²¡æœ‰æ‰¾åˆ° PDF æ–‡ä»¶ã€‚
-    echo è¯·æŠŠå¾…æ ¸éªŒçš„ PDF æ”¾å…¥ inputfile ç›®å½•åå†è¿è¡Œã€‚
+    echo [ÌáÊ¾] inputfile Ä¿Â¼ÏÂÃ»ÓĞÕÒµ½ PDF ÎÄ¼ş¡£
+    echo Çë°Ñ´ıºËÑéµÄ PDF ·ÅÈë inputfile Ä¿Â¼ºóÔÙÔËĞĞ¡£
     echo.
     pause
     exit /b 0
 )
 
-echo æ‰¾åˆ° %count% ä¸ª PDF æ–‡ä»¶ï¼Œå¼€å§‹æ ¸éªŒ...
+echo ÕÒµ½ %count% ¸ö PDF ÎÄ¼ş£¬¿ªÊ¼ºËÑé...
 echo.
 
-REM è¿è¡Œæ ¸éªŒ
+rem run verify
+set PYTHONIOENCODING=gbk
 ".venv\Scripts\python.exe" main.py
 
 echo.
 echo ========================================
-echo   æ ¸éªŒå®Œæˆï¼ŒæŠ¥å‘Šå·²è¾“å‡ºåˆ° output ç›®å½•
+echo   ºËÑéÍê³É£¬±¨¸æÒÑÊä³öµ½ output Ä¿Â¼
 echo ========================================
 echo.
 pause
