@@ -16,10 +16,12 @@ from __future__ import annotations
 import argparse
 import datetime
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
 
+from pdf_checker.extract import Line, Span
 from pdf_checker.report import print_console, write_excel, write_json
 from pdf_checker.validate import load_rules, validate_pdf
 
@@ -113,6 +115,76 @@ def is_scanned_pdf(pdf_path: str, sample_pages: int = 3) -> bool:
         return False
 
 
+def ocr_cache_complete(pdf_path: Path) -> bool:
+    """检查 OCR 缓存是否完整（缓存页数 == PDF 页数）。"""
+    ocr_dir = CACHE_DIR / "ocr" / pdf_path.stem
+    if not ocr_dir.exists():
+        return False
+    pages = list(ocr_dir.glob("page_*.txt"))
+    if not pages:
+        return False
+    try:
+        import pymupdf
+        doc = pymupdf.open(pdf_path)
+        n = doc.page_count
+        doc.close()
+        return len(pages) >= n
+    except Exception:
+        return True  # 无法打开 PDF 时信任已有缓存
+
+
+def run_ocr(pdf_path: Path) -> bool:
+    """自动调用 tools/ocr_pdf.py 执行 OCR，成功返回 True。"""
+    script = PROJECT_ROOT / "tools" / "ocr_pdf.py"
+    print(f"  [OCR] 未找到完整缓存，自动执行 OCR: {pdf_path.name} ...")
+    print(f"        请耐心等待，扫描件按页识别，耗时取决于页数...")
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script), str(pdf_path)],
+            cwd=str(PROJECT_ROOT),
+        )
+        return result.returncode == 0
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [OCR错误] {exc}", file=sys.stderr)
+        return False
+
+
+def load_ocr_text(pdf_path: Path) -> str:
+    """读取 OCR 缓存全文（优先 full_text.txt，否则拼接 page_*.txt）。"""
+    ocr_dir = CACHE_DIR / "ocr" / pdf_path.stem
+    ft = ocr_dir / "full_text.txt"
+    if ft.exists():
+        return ft.read_text(encoding="utf-8")
+    parts = []
+    for f in sorted(ocr_dir.glob("page_*.txt")):
+        parts.append(f.read_text(encoding="utf-8"))
+    return "\n".join(parts)
+
+
+def build_ocr_lines(pdf_path: Path) -> list[Line]:
+    """把 OCR 缓存文本构造为伪坐标 Line 列表，供字段定位使用。
+
+    OCR 文本没有 PDF 坐标，这里把每行作为一个独立 Line：
+    - 同行"标签：值"由 span 内切分逻辑处理（标签右侧取内容）；
+    - 行距拉大到 100，避免"同一基线右侧"误拼其它行；
+    - below 定位对 OCR 行不适用（无真实上下坐标），依赖同行取值。
+    """
+    ocr_dir = CACHE_DIR / "ocr" / pdf_path.stem
+    lines: list[Line] = []
+    pno = 0
+    y = 0.0
+    for f in sorted(ocr_dir.glob("page_*.txt")):
+        for text in f.read_text(encoding="utf-8").splitlines():
+            if not text.strip():
+                continue
+            w = float(len(text))
+            span = Span(page=pno, x0=0.0, y0=y, x1=w, y1=y, text=text)
+            lines.append(Line(page=pno, x0=0.0, y0=y, x1=w, y1=y, spans=[span]))
+            y += 100.0
+        pno += 1
+    return lines
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="人员核验 PDF 自动校验：提取打印内容并对照规则检查",
@@ -160,11 +232,21 @@ def main() -> int:
     results = []
     for pdf in pdf_files:
         print(f"正在核验: {pdf.name} ...")
+        ocr_lines: list[Line] | None = None
+        ocr_text = ""
         if is_scanned_pdf(str(pdf)):
-            print(f"  [警告] {pdf.name} 疑似扫描件（无文本层），直接核验可能得到空结果。")
-            print(f"         建议先运行: python tools/ocr_pdf.py \"{pdf}\"")
+            # 扫描件：自动检查 OCR 缓存，无缓存/不完整则自动 OCR
+            if not ocr_cache_complete(pdf):
+                if not run_ocr(pdf):
+                    print(f"  [警告] {pdf.name} OCR 失败，将按原始文本核验（结果可能为空）。")
+                else:
+                    print(f"  [OK] {pdf.name} OCR 完成，缓存: .cache/ocr/{pdf.stem}")
+            else:
+                print(f"  [缓存] {pdf.name} 已有完整 OCR 缓存，直接使用。")
+            ocr_lines = build_ocr_lines(pdf)
+            ocr_text = load_ocr_text(pdf)
         try:
-            results.append(validate_pdf(str(pdf), rules))
+            results.append(validate_pdf(str(pdf), rules, ocr_lines=ocr_lines, ocr_text=ocr_text))
         except Exception as exc:  # noqa: BLE001
             print(f"[错误] 解析 {pdf.name} 失败: {exc}", file=sys.stderr)
             continue

@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from .extract import extract_full_text, extract_lines
+from .extract import Line, extract_full_text, extract_lines
 from .locate import locate_field_values, regex_fallback
 from .validators import run_cross_check, run_single_rule
 
@@ -70,9 +70,23 @@ def load_rules(rules_path: str) -> Dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
-def validate_pdf(pdf_path: str, rules: Dict[str, Any]) -> FileResult:
+def validate_pdf(
+    pdf_path: str,
+    rules: Dict[str, Any],
+    ocr_lines: Optional[List[Line]] = None,
+    ocr_text: str = "",
+) -> FileResult:
+    """校验单个 PDF。
+
+    ocr_lines / ocr_text：扫描件 OCR 结果（仅当 PDF 文本层为空时使用，
+    作为 locate 定位与正则兜底的文本源），普通 PDF 不受影响。
+    """
     lines = extract_lines(pdf_path)
     full_text = extract_full_text(pdf_path)
+    if ocr_lines and not lines:
+        lines = ocr_lines
+    if ocr_text and not full_text.strip():
+        full_text = ocr_text
 
     fields_cfg: List[Dict[str, Any]] = rules.get("fields", [])
     all_labels = [str(f.get("label", "")) for f in fields_cfg if f.get("label")]

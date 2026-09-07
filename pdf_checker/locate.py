@@ -160,8 +160,11 @@ def locate_field_values(
 
 
 def regex_fallback(full_text: str, label: str) -> Optional[str]:
-    """兜底：直接在整页文本里用正则找“标签后跟值”。"""
-    pattern = re.compile(re.escape(label) + r"[\s:：]*([^\s:：,，。;；、|｜]{1,60})")
+    """兜底：直接在整页文本里用正则找“标签后跟值”。
+
+    注意不跨行匹配（[ \\t:：]*），避免标签后空值时误取下一行内容。
+    """
+    pattern = re.compile(re.escape(label) + r"[ \t:：]*([^\s:：,，。;；、|｜]{1,60})")
     m = pattern.search(full_text)
     if not m:
         return None
