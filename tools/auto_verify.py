@@ -624,16 +624,22 @@ def main() -> int:
         else:
             names = []
             names_source = "无统计表"
-    # 无统计表/名单（如联合体文件第1页直接是个人资料）：按"申请人个人资料"页切分，
-    # 姓名从资料页"（中文）XXX"字段提取
+    # 统计表名单与个人资料页数量不一致 → 统计表 OCR 不可信（乱序/表头混入），
+    # 回退到个人资料页切分方案（每页"（中文）XXX"字段更可靠）
+    person_starts = [n for n, t in pages if "personal_info" in classify_page(t)]
+    if names and person_starts and len(names) != len(person_starts):
+        print(f"[提示] 第1页统计表提取到 {len(names)} 人，与个人资料页 {len(person_starts)} 个不一致，"
+              f"改用个人资料页姓名提取")
+        names = []
+    # 无统计表/名单（或统计表不可信）：按"申请人个人资料"页切分，
+    # 姓名从资料页"（中文）XXX"字段提取（OCR 丢字时允许 1 个汉字，如"（中文）将"）
     if not names:
-        person_starts = [n for n, t in pages if "personal_info" in classify_page(t)]
         if person_starts:
             for s in person_starts:
                 t = next(t for n, t in pages if n == s)
                 m = re.search(
                     r"[（(]\s*中文\s*[）)]\s*[:：]?\s*"
-                    r"([\u4e00-\u9fa5]{2,6}|[A-Za-z][A-Za-z ]{1,29})",
+                    r"([\u4e00-\u9fa5]{1,6}|[A-Za-z][A-Za-z ]{1,29})",
                     t)
                 names.append(m.group(1).strip() if m else f"人员{s}")
             names_source = "个人资料页切分（无第1页统计表）"
