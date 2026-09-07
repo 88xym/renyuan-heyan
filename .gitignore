@@ -21,3 +21,4 @@ Thumbs.db
 
 # OCR 缓存（含敏感信息）
 .cache/
+output/*.zip
