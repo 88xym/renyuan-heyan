@@ -99,9 +99,12 @@ python tools/generate_report_pdf.py --company 中交天航 --date 2026-09-06
 ├── output/                 # 核验报告（xlsx/json/pdf，自动生成）
 ├── .cache/ocr/             # OCR 缓存（自动生成，含个人信息，已 gitignore）
 ├── config/
-│   ├── rules.yaml          # 字段校验规则
-│   ├── check_policy.yaml   # 核验策略（手写体宽松/0-O不区分等）
-│   └── organization.yaml   # 分包层级（总包→一包→二包）
+│   ├── rules.yaml              # 字段校验规则（示例）
+│   ├── check_policy.yaml       # 核验策略（手写体宽松/0-O不区分等）
+│   ├── organization.yaml       # 分包层级（总包→一包→二包）
+│   └── verification_rules.yaml # 三类人员核验标准规则 v2.0（资料清单/合同逻辑/蓝卡特殊）
+├── docs/
+│   └── 人员核验标准.md          # 核验标准人工对照版（三类人员资料清单+检查项）
 ├── pdf_checker/            # 核心代码
 │   ├── extract.py          #   提取打印文本（含坐标）
 │   ├── locate.py           #   按标签定位字段值
@@ -138,6 +141,14 @@ python tools/generate_report_pdf.py --company 中交天航 --date 2026-09-06
 - `zero_vs_oh: ignore` — 不区分数字 0 和字母 O
 - `unclear_signature: pass` — 签名看不清视为已签署
 - `empty_field: fail` — 字段完全空白仍判为缺失
+
+`config/verification_rules.yaml` 定义三类人员核验标准（v2.0）：
+- **澳门本地人**：6项资料，含身份证真伪记录（必附）
+- **特别逗留证人士**：5项资料，无真伪记录要求
+- **蓝卡**：6项资料，含劳工三表一致性核验；蓝卡未颁发时行街纸+红印纸可替代
+- **合同逻辑**：承判商声明单位与第一页不一致 → 补二判/三判合同；直属总包 → 免附合同
+
+`docs/人员核验标准.md` 为人工对照版核验标准。
 
 `config/organization.yaml` 定义分包层级，雇佣关系不同（如受雇于一包但实际是二包员工）不视为矛盾。
 
