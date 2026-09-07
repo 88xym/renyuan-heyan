@@ -84,6 +84,80 @@ def norm_text(text: str) -> str:
     return text
 
 
+# 常见姓氏 → 拼音首字母（用于单字名修复时按英文名校验候选姓氏）
+_SURNAME_PY_INIT = {
+    "韦": "W", "陈": "C", "李": "L", "梁": "L", "王": "W", "张": "Z",
+    "黄": "H", "孟": "M", "曾": "Z", "郝": "H", "霍": "H", "韩": "H",
+    "刘": "L", "吴": "W", "郑": "Z", "谭": "T", "罗": "L", "杨": "Y",
+    "周": "Z", "赵": "Z", "孙": "S", "马": "M", "朱": "Z", "胡": "H",
+    "郭": "G", "何": "H", "林": "L", "高": "G", "徐": "X", "唐": "T",
+    "潘": "P", "冯": "F", "蒋": "J", "蔡": "C", "余": "Y", "杜": "D",
+    "叶": "Y", "程": "C", "苏": "S", "魏": "W", "吕": "L", "丁": "D",
+    "任": "R", "沈": "S", "姚": "Y", "卢": "L", "傅": "F", "钟": "Z",
+    "姜": "J", "崔": "C", "陆": "L", "常": "C", "温": "W", "石": "S",
+    "邓": "D", "曹": "C", "袁": "Y", "汤": "T", "谢": "X", "宋": "S",
+    "康": "K", "童": "T", "夏": "X", "龚": "G", "施": "S", "董": "D",
+    "顾": "G", "熊": "X", "江": "J", "欧": "O", "詹": "Z", "毛": "M",
+    "戴": "D", "秦": "Q", "邱": "Q", "邵": "S", "严": "Y", "尹": "Y",
+    "黎": "L", "汪": "W", "侯": "H", "武": "W", "白": "B", "钱": "Q",
+    "薛": "X", "倪": "N", "于": "Y", "万": "W", "金": "J", "史": "S",
+    "乔": "Q", "骆": "L", "纪": "J", "盛": "S", "洪": "H", "范": "F",
+    "葛": "G", "贾": "J", "颜": "Y", "肖": "X", "苗": "M", "廖": "L",
+    "文": "W", "段": "D", "雷": "L", "贺": "H", "彭": "P", "田": "T",
+    "翁": "W", "卓": "Z", "庞": "P", "游": "Y", "宁": "N", "殷": "Y",
+}
+
+# 英文名首词 → 最常见中文姓氏（OCR 丢姓氏时的启发式修复，如 WEI→韦）
+_EN_SURNAME = {
+    "WEI": "韦", "CHEN": "陈", "LI": "李", "LIANG": "梁", "WANG": "王",
+    "ZHANG": "张", "HUANG": "黄", "MENG": "孟", "ZENG": "曾", "HAO": "郝",
+    "HUO": "霍", "HAN": "韩", "LIU": "刘", "WU": "吴", "ZHENG": "郑",
+    "TAN": "谭", "LUO": "罗", "YANG": "杨", "ZHOU": "周", "ZHAO": "赵",
+    "SUN": "孙", "MA": "马", "ZHU": "朱", "HU": "胡", "GUO": "郭",
+    "HE": "何", "LIN": "林", "GAO": "高", "XU": "徐", "TANG": "唐",
+    "PAN": "潘", "FENG": "冯", "JIANG": "蒋", "CAI": "蔡", "YU": "余",
+    "DU": "杜", "YE": "叶", "CHENG": "程", "SU": "苏", "LV": "吕",
+    "DING": "丁", "REN": "任", "SHEN": "沈", "YAO": "姚", "LU": "卢",
+    "FU": "傅", "ZHONG": "钟", "CUI": "崔", "LONG": "龙", "WAN": "万",
+    "JIN": "金", "SHI": "史", "QIAO": "乔", "QIU": "邱", "SHAO": "邵",
+    "YAN": "严", "YIN": "尹", "QIAN": "钱", "XUE": "薛", "NI": "倪",
+}
+
+
+def repair_short_name(name: str, en_name: str, text: str) -> str:
+    """OCR 把姓名识别成单字（丢姓氏，如"（中文）将"）时，根据上下文补全。
+
+    证据优先级：
+    1) 文本内"姓氏+该字"两字行候选，且候选姓氏拼音首字母与英文名首词一致
+       （如文档出现"韦将"，英文 WEI JIANG → 采用"韦将"）；
+    2) 无英文名且文本内候选唯一 → 采用该候选；
+    3) 英文名首词 → 常见中文姓映射（如 WEI→韦，拼出"韦将"）。
+    无可靠证据保持原样（宽松原则，不冒险误改）。
+    """
+    if len(name) != 1 or not ("\u4e00" <= name <= "\u9fa5"):
+        return name
+    en = (en_name or "").strip().upper()
+    parts = en.split()
+    en_first = parts[0] if parts else ""
+    en_init = en_first[0] if en_first else ""
+    # 1) 文本内"姓氏+名"两字行候选
+    cands = sorted({
+        line.strip() for line in text.splitlines()
+        if len(line.strip()) == 2 and line.strip()[1] == name
+        and line.strip()[0] in _SURNAMES
+    })
+    for cand in cands:
+        s_py = _SURNAME_PY_INIT.get(cand[0], "")
+        if en_init and s_py == en_init:
+            return cand
+    if not en_init and len(cands) == 1:
+        return cands[0]
+    # 3) 英文名首词 → 常见中文姓（启发式）
+    if en_first and en_first in _EN_SURNAME:
+        return _EN_SURNAME[en_first] + name
+    return name
+
+
 # 公司名特征词（用于甄别"承判公司名称"字段是否为可信公司名，过滤 OCR 噪声）
 _COMPANY_WORDS = ["有限", "公司", "建筑", "工程", "建设", "集团", "实业",
                   "发展", "国际", "澳门", "承包", "劳务", "服务", "装饰", "装修"]
@@ -635,13 +709,25 @@ def main() -> int:
     # 姓名从资料页"（中文）XXX"字段提取（OCR 丢字时允许 1 个汉字，如"（中文）将"）
     if not names:
         if person_starts:
-            for s in person_starts:
+            for i, s in enumerate(person_starts):
                 t = next(t for n, t in pages if n == s)
                 m = re.search(
                     r"[（(]\s*中文\s*[）)]\s*[:：]?\s*"
                     r"([\u4e00-\u9fa5]{1,6}|[A-Za-z][A-Za-z ]{1,29})",
                     t)
-                names.append(m.group(1).strip() if m else f"人员{s}")
+                name = m.group(1).strip() if m else f"人员{s}"
+                # OCR 丢姓氏修复：单字名按上下文（英文名/文档内"姓氏+名"）补全
+                if re.fullmatch(r"[\u4e00-\u9fa5]{1}", name):
+                    end = (person_starts[i + 1] - 1) if i + 1 < len(person_starts) else pages[-1][0]
+                    scope = "".join(tt for n, tt in pages if s <= n <= end)
+                    m_en = re.search(
+                        r"[（(]\s*英文\s*[）)]\s*[:：]?\s*([A-Za-z][A-Za-z ]{1,29})",
+                        t)
+                    repaired = repair_short_name(name, m_en.group(1) if m_en else "", scope)
+                    if repaired != name:
+                        print(f"  [修复] 资料页中文名'{name}'按上下文补全为'{repaired}'")
+                    name = repaired
+                names.append(name)
             names_source = "个人资料页切分（无第1页统计表）"
     if not names:
         print("[错误] 无法提取人员名单，请用 --names 指定", file=sys.stderr)
