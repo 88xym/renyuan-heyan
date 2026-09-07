@@ -8,5 +8,6 @@ reportlab>=4.0
 
 # 扫描件 OCR（可选，仅处理扫描件时需要）
 # 首次运行会自动下载 ONNX 模型（约 15MB），需联网
-rapidocr-onnxruntime>=1.3
+# 注意：版本已锁定，避免跨电脑 OCR 识别结果漂移（不同版本统计表识别差异会导致名单错乱）
+rapidocr-onnxruntime==1.2.3
 numpy>=1.24

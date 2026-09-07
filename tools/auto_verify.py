@@ -296,6 +296,40 @@ def is_name_on_pages(name: str, pages: list[tuple[int, str]], skip_pages: set[in
     return False
 
 
+# 统计表名单中的明显非人名词（职务/称呼/表头等，如"管理人员"），提取后直接剔除
+_NON_NAME_WORDS = ["管理", "负责", "联络", "跟进", "经理", "主任", "文员",
+                   "公司", "单位", "职务", "姓名", "序号", "人员"]
+
+
+def _same_person(a: str, b: str) -> bool:
+    """判断两个姓名是否同一人：繁简变体匹配；或一方为单字残缺版被另一方包含
+    （如资料页 OCR 丢字"将" vs 统计表完整"韦将"）。"""
+    va = name_variants(a)
+    vb = name_variants(b)
+    if va & vb:
+        return True
+    for x in va:
+        for y in vb:
+            if len(x) == 1 and x in y:
+                return True
+            if len(y) == 1 and y in x:
+                return True
+    return False
+
+
+def extract_info_names(pages: list[tuple[int, str]], starts: list[int]) -> list[str]:
+    """从个人资料页切分点提取各页"（中文）XXX"姓名（提取不到返回空串）。"""
+    info_names = []
+    for s in starts:
+        t = next((t for n, t in pages if n == s), "")
+        m = re.search(
+            r"[（(]\s*中文\s*[）)]\s*[:：]?\s*"
+            r"([\u4e00-\u9fa5]{1,6}|[A-Za-z][A-Za-z ]{1,29})",
+            t)
+        info_names.append(m.group(1).strip() if m else "")
+    return info_names
+
+
 def classify_page(text: str) -> set[str]:
     """按标题特征给页面打分类标签（文本先做繁简归一化）。
 
@@ -722,13 +756,28 @@ def process_one_pdf(pdf_path: Path, args) -> int:
         else:
             names = []
             names_source = "无统计表"
-    # 统计表名单与个人资料页数量不一致 → 统计表 OCR 不可信（乱序/表头混入），
-    # 回退到个人资料页切分方案（每页"（中文）XXX"字段更可靠）
+    # 统计表名单剔除明显非人名词（职务/表头杂质，如"管理人员"）
+    bad = [n for n in names if any(w in n for w in _NON_NAME_WORDS)]
+    if bad:
+        print(f"[提示] 统计表名单剔除疑似非人名项: {', '.join(bad)}")
+        names = [n for n in names if n not in bad]
+    # 统计表名单与个人资料页比对：
+    # - 数量不等（含剔除杂质后）→ 统计表 OCR 不可信，回退资料页切分；
+    # - 数量相等但姓名顺序/内容不一致 → 仅提示（资料页"（中文）"字段本身可能 OCR 残缺，
+    #   如 李松林→松称；统计表为打印内容更可信，不回退）。
     person_starts = [n for n, t in pages if "personal_info" in classify_page(t)]
     if names and person_starts and len(names) != len(person_starts):
         print(f"[提示] 第1页统计表提取到 {len(names)} 人，与个人资料页 {len(person_starts)} 个不一致，"
               f"改用个人资料页姓名提取")
         names = []
+    elif names and person_starts and len(names) == len(person_starts):
+        info_names = extract_info_names(pages, person_starts)
+        mismatch = [i for i in range(len(names))
+                    if not (info_names[i] and _same_person(names[i], info_names[i]))]
+        if mismatch:
+            print(f"[提示] 统计表名单与资料页姓名有 {len(mismatch)} 处不一致"
+                  f"（统计表: {', '.join(names)} vs 资料页: {', '.join(x or '?' for x in info_names)}），"
+                  f"以统计表为准，请人工留意")
     # 无统计表/名单（或统计表不可信）：按"申请人个人资料"页切分，
     # 姓名从资料页"（中文）XXX"字段提取（OCR 丢字时允许 1 个汉字，如"（中文）将"）
     if not names:
