@@ -6,9 +6,6 @@ PyYAML>=6.0
 # PDF 报告生成
 reportlab>=4.0
 
-# 页眉表头.docx 动态读取（可选；缺失时回退内置页眉文字）
-python-docx>=1.1
-
 # 扫描件 OCR（可选，仅处理扫描件时需要）
 # 首次运行会自动下载 ONNX 模型（约 15MB），需联网
 rapidocr-onnxruntime>=1.3
