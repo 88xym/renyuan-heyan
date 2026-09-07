@@ -43,6 +43,124 @@ from reportlab.platypus import (
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # ============================================================================
+# 页眉（来自 页眉表头.docx，每页顶部绘制）
+# ============================================================================
+HEADER_DOCX = PROJECT_ROOT / "页眉表头.docx"
+HEADER_LOGO_DIR = PROJECT_ROOT / "config" / "header"
+HEADER_LOGO = HEADER_LOGO_DIR / "consortium_logo.png"
+
+# 内置默认页眉（docx 缺失/读取失败时回退；内容与 页眉表头.docx 一致）
+_DEFAULT_HEADER_LINES = [
+    "中國港灣工程有限責任公司 CHINA HARBOUR ENGINEERING COMPANY LTD.",
+    "澳門宋玉生廣場181-187號光輝商業中心6樓H座  電話:28323535  傳真:28331376",
+    "西北民航機場建設集團有限責任公司 NCAACG",
+    "陝西省西安市高新區唐延路唐延國際中心24層  電話:029-88793033  傳真:029-88793034",
+    "明信建築置業有限公司 MING SHUN CONSTRUCTION & PROPERTY INVESTMENT LTD.",
+    "澳門高美士街14號景秀花園1樓B&C  電話:28701611  傳真:28701622",
+]
+
+
+def load_header() -> tuple[list[str], Path | None]:
+    """读取 页眉表头.docx 的页眉：返回 (文字行列表, 图片路径或 None)。
+
+    优先从 docx 动态读取（用户修改 docx 后重跑即生效）：
+    - 文字：header 表格第 1 列各段文本；
+    - 图片：解压 word/media/ 第一张图片到 config/header/consortium_logo.png。
+    docx 缺失、无 python-docx 或解析失败时回退内置默认文字与 config/header 图片。
+    """
+    logo = HEADER_LOGO if HEADER_LOGO.exists() else None
+    if not HEADER_DOCX.exists():
+        return list(_DEFAULT_HEADER_LINES), logo
+    try:
+        import zipfile
+
+        import docx  # python-docx（可选依赖）
+
+        d = docx.Document(str(HEADER_DOCX))
+        lines: list[str] = []
+        for section in d.sections:
+            hdr = section.header
+            if hdr and not hdr.is_linked_to_previous:
+                for tbl in hdr.tables:
+                    for row in tbl.rows:
+                        for cell in row.cells:
+                            for p in cell.paragraphs:
+                                t = p.text.strip()
+                                if t:
+                                    lines.append(t)
+                if lines:
+                    break
+        if not lines:
+            # 表格为空时退回段落
+            for p in hdr.paragraphs:
+                t = p.text.strip()
+                if t:
+                    lines.append(t)
+        # 解压第一张媒体图片
+        with zipfile.ZipFile(HEADER_DOCX) as z:
+            media = sorted(n for n in z.namelist()
+                           if n.startswith("word/media/") and not n.endswith("/"))
+            if media:
+                HEADER_LOGO_DIR.mkdir(parents=True, exist_ok=True)
+                HEADER_LOGO.write_bytes(z.read(media[0]))
+                logo = HEADER_LOGO
+        return (lines if lines else list(_DEFAULT_HEADER_LINES)), logo
+    except Exception:  # noqa: BLE001
+        return list(_DEFAULT_HEADER_LINES), logo
+
+
+HEADER_LINES, HEADER_LOGO_PATH = load_header()
+
+# 整幅页眉横幅图（用户提供：左侧三家公司信息 + 右侧联营 logo，与 docx 页眉一致）
+HEADER_BANNER = PROJECT_ROOT / "表头照片.png"
+
+
+def draw_page_header(canvas, doc) -> None:
+    """每页顶部绘制页眉：优先整幅横幅图；无图时回退左侧文字 + 右侧联营 logo。"""
+    canvas.saveState()
+    page_w, page_h = A4
+    left_margin = 18 * mm
+    right_margin = 18 * mm
+    top_margin = 34 * mm
+    banner_ok = False
+    if HEADER_BANNER.exists():
+        try:
+            img_w = 170 * mm
+            img_h = img_w * 208 / 1353  # 原图 1353x208 等比缩放
+            img_y = page_h - 6 * mm - img_h
+            canvas.drawImage(str(HEADER_BANNER), left_margin, img_y, img_w, img_h,
+                             preserveAspectRatio=True, mask="auto")
+            banner_ok = True
+        except Exception:  # noqa: BLE001
+            banner_ok = False
+    if not banner_ok:
+        # 回退：左侧文字（最多 6 行）+ 右侧 logo，整体位于正文区上方
+        canvas.setFont(FONT_REGULAR, 7)
+        canvas.setFillColor(colors.HexColor("#333333"))
+        line_h = 8.2
+        text_top = page_h - 8 * mm - line_h
+        y = text_top
+        for line in HEADER_LINES[:6]:
+            canvas.drawString(left_margin, y, line)
+            y -= line_h
+        if HEADER_LOGO_PATH and HEADER_LOGO_PATH.exists():
+            try:
+                img_w = 52 * mm
+                img_h = img_w * 199 / 525  # 原图 525x199 等比缩放
+                img_x = page_w - right_margin - img_w
+                img_y = text_top - img_h
+                canvas.drawImage(str(HEADER_LOGO_PATH), img_x, img_y, img_w, img_h,
+                                 preserveAspectRatio=True, mask="auto")
+            except Exception:  # noqa: BLE001
+                pass
+    # 分隔线（正文区上方 1.5mm）
+    canvas.setStrokeColor(colors.HexColor("#999999"))
+    canvas.setLineWidth(0.6)
+    line_y = page_h - top_margin + 1.5 * mm
+    canvas.line(left_margin, line_y, page_w - right_margin, line_y)
+    canvas.restoreState()
+
+# ============================================================================
 # 跨平台中文字体探测
 # ============================================================================
 # 注意：reportlab 只支持 TrueType outlines，不支持 OTF/CFF。
@@ -399,7 +517,7 @@ def main() -> int:
         str(out_path),
         pagesize=A4,
         leftMargin=18*mm, rightMargin=18*mm,
-        topMargin=15*mm, bottomMargin=15*mm,
+        topMargin=34*mm, bottomMargin=15*mm,
         title=f"{company_short} 人员入场资料核验报告",
         author="人员核验系统",
     )
@@ -415,7 +533,7 @@ def main() -> int:
         if idx < total:
             story.append(PageBreak())
 
-    doc.build(story)
+    doc.build(story, onFirstPage=draw_page_header, onLaterPages=draw_page_header)
     print(f"PDF 已生成: {out_path}")
     print(f"共 {total} 人（含第 1 页总结页，共 {total_pages} 页）。")
     print(f"字体: {FONT_REGULAR} (自动探测)")
