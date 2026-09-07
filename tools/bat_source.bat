@@ -43,6 +43,12 @@ rem run verify
 set PYTHONIOENCODING=gbk
 ".venv\Scripts\python.exe" main.py
 
+rem auto verify -> PDF report (per-person one page)
+echo.
+echo [PDF] 正在生成每人一页核验报告（自动读取 OCR 缓存）...
+echo [PDF] 如扫描件未 OCR，会自动先 OCR，请耐心等待...
+".venv\Scripts\python.exe" tools\auto_verify.py
+
 echo.
 echo ========================================
 echo   核验完成，报告已输出到 output 目录

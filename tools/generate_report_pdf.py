@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """人员入场资料核验报告 PDF 生成器（跨平台版）。
 
-每人一页 A4，包含：基本信息、6类页面齐全性、名字/公司/日期一致性、
+每人一页 A4，包含：基本信息、支撑页面齐全性、名字/公司/日期一致性、
 问题清单、结论。输出到 output/ 目录，文件名：<公司简称>-<日期>.pdf
 
 跨平台说明：
@@ -216,7 +216,7 @@ def build_person_page(p: dict, idx: int, total: int, company_short: str,
     story.append(info_table)
     story.append(Spacer(1, 6))
 
-    story.append(Paragraph("一、6类支撑页面齐全性", H2))
+    story.append(Paragraph("一、支撑页面齐全性", H2))
     story.append(Paragraph(p["pages_check"], BODY))
     story.append(Spacer(1, 4))
 
