@@ -249,6 +249,109 @@ def _clean(s: str) -> str:
     return re.sub(r"[^0-9A-Za-z]", "", s.upper())
 
 
+def _digits(s: str) -> str:
+    """提取纯数字序列，用于证件号宽松比对（OCR 常多/漏识别字母或前导字符）。"""
+    return re.sub(r"[^0-9]", "", s or "")
+
+
+def parse_date(s: str) -> datetime.date | None:
+    """从文本片段解析日期，兼容多种 OCR 格式。
+
+    支持：DD(D)MM(M)YYYY(Y)、DD/MM/YYYY、YYYY.MM.DD、YYYYMM.DD、YYYY.MMDD。
+    解析失败返回 None（不误报）。
+    """
+    s = (s or "").strip()
+    # DD(D)MM(M)YYYY(Y)  如 16(D)08(M)2028(Y)
+    m = re.search(
+        r"(\d{1,2})\s*[（(]?\s*D\s*[）)]?\s*[^\d]{0,4}"
+        r"(\d{1,2})\s*[（(]?\s*M\s*[）)]?\s*[^\d]{0,4}"
+        r"(20\d{2})\s*[（(]?\s*Y\s*[）)]?",
+        s,
+    )
+    if m:
+        try:
+            return datetime.date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+        except ValueError:
+            pass
+    # DD/MM/YYYY
+    m = re.search(r"(\d{1,2})/(\d{1,2})/(20\d{2})", s)
+    if m:
+        try:
+            return datetime.date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+        except ValueError:
+            pass
+    # YYYY.MM.DD（显式分隔）或 YYYYMM.DD（年月连写）
+    m = re.search(r"(20\d{2})\s*[./-]\s*(\d{1,2})\s*[./-]\s*(\d{1,2})", s)
+    if not m:
+        m = re.search(r"(20\d{2})(\d{2})\s*[./-]\s*(\d{2})", s)
+    if m:
+        try:
+            return datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            pass
+    return None
+
+
+def extract_validity(text: str) -> list[tuple[str, datetime.date]]:
+    """从文本提取证件有效期（仅打印内容，OCR 识别不到不提取、不误报）。
+
+    返回 [(标签, 到期日)]，标签区分：
+    - "通行证/签注有效期"：区间型（"2026.04.17-2036.04.16"，取结束日期）
+    - "逗留许可/职安卡有效期"：单日期型（"有效期至/有效日期"标签）
+
+    防误报措施：
+    - 日期前出现"签发/查询"标签视为签发/查询日期，跳过；
+    - 日期行含"扫码/二维码"视为蓝卡查询记录日期，跳过；
+    - 出生日期（19xx 或 20xx 无有效期标签）不会被提取。
+    """
+    out: list[tuple[str, datetime.date]] = []
+    # 区间型（取结束日期）
+    for m in re.finditer(
+        r"(20\d{2})\s*[./-]?\s*(\d{1,2})\s*[./-]\s*(\d{1,2})"
+        r"\s*[-–—~]\s*(20\d{2})\s*[./-]?\s*(\d{1,2})\s*[./-]\s*(\d{1,2})",
+        text,
+    ):
+        try:
+            out.append(("通行证/签注有效期", datetime.date(
+                int(m.group(4)), int(m.group(5)), int(m.group(6)))))
+        except ValueError:
+            pass
+    # 单日期型（带"有效期至/有效日期"标签，标签与日期可能跨行）
+    for m in re.finditer(r"有效期至|有效日期", text):
+        seg = text[m.start(): m.start() + 50]
+        # 找第一个可解析日期及其位置
+        found: list[tuple[int, datetime.date]] = []
+        for pat in (
+            r"(\d{1,2})\s*[（(]?\s*D\s*[）)]?\s*[^\d]{0,4}"
+            r"(\d{1,2})\s*[（(]?\s*M\s*[）)]?\s*[^\d]{0,4}"
+            r"(20\d{2})\s*[（(]?\s*Y\s*[）)]?",
+            r"(\d{1,2})/(\d{1,2})/(20\d{2})",
+            r"(20\d{2})\s*[./-]\s*(\d{1,2})\s*[./-]\s*(\d{1,2})",
+            r"(20\d{2})(\d{2})\s*[./-]\s*(\d{2})",
+        ):
+            for dm in re.finditer(pat, seg):
+                d = parse_date(dm.group(0))
+                if d:
+                    found.append((dm.start(), d))
+        if not found:
+            continue
+        found.sort()
+        pos, d = found[0]
+        pre = seg[:pos]
+        # 日期前是签发/查询记录 → 跳过（防"签发日期：28(D)03(M)2026"误当有效期）
+        if re.search(r"签发|查询|簽發|查詢", pre):
+            continue
+        # 日期行含扫码/二维码 → 蓝卡查询记录（查询日期）→ 跳过
+        line_end = seg.find("\n", pos)
+        line = seg[pos: line_end if line_end > 0 else None]
+        if re.search(r"扫码|二维|二维码|MACAU", line):
+            continue
+        out.append(("逗留许可/职安卡有效期", d))
+    # 去重
+    seen: set[tuple[str, datetime.date]] = set()
+    return [x for x in out if not (x in seen or seen.add(x))]
+
+
 def line_has_content(text: str, label: str) -> tuple[bool, str]:
     """检查 'label' 同行是否有填写内容。返回 (是否已填, 同行内容)。"""
     m = re.search(label + r"[:：]?\s*([^\n]*)", text)
@@ -276,7 +379,8 @@ def find_line_after(text: str, anchor: str, label: str) -> tuple[bool, str]:
 # ============================================================================
 # 单人核验
 # ============================================================================
-def check_person(name: str, person_pages: list[tuple[int, str]], names_all: list[str]) -> dict:
+def check_person(name: str, person_pages: list[tuple[int, str]], names_all: list[str],
+                 report_date: datetime.date) -> dict:
     """对一个人执行完整核验，返回报告数据结构。"""
     # 统一繁简归一化，后续全部关键词/正则匹配基于规范简体
     person_pages = [(n, norm_text(t)) for n, t in person_pages]
@@ -380,8 +484,8 @@ def check_person(name: str, person_pages: list[tuple[int, str]], names_all: list
                 f"与劳工局批示编号({m_bureau.group(0)})不一致，需人工核实是否属不同批示"
             )
 
-    # ---- 一致性（宽松比对）----
-    id_no, card_no, company, chinese_name = "", "", "", ""
+    # ---- 一致性（资料页 ↔ 证件页双向宽松比对）----
+    id_no, card_no, company, chinese_name, en_name = "", "", "", "", ""
     if p_info_text:
         m = re.search(r"身份证号码[:：]*\s*([0-9A-Za-z（）()/／-]+)", p_info_text)
         id_no = m.group(1).strip() if m else ""
@@ -389,13 +493,26 @@ def check_person(name: str, person_pages: list[tuple[int, str]], names_all: list
         card_no = m.group(1).strip() if m else ""
         m = re.search(r"承判公司名[称稱]?\s*[:：]?\s*([^\n]+)", p_info_text)
         company = extract_company_name(m.group(1)) if m else ""
-        m = re.search(r"（中文）([\u4e00-\u9fa5]+)", p_info_text)
+        m = re.search(r"[（(]\s*中文\s*[）)]\s*[:：]?\s*([\u4e00-\u9fa5]+)", p_info_text)
         chinese_name = m.group(1) if m else ""
+        m = re.search(r"[（(]\s*英文\s*[）)]\s*[:：]?\s*([A-Za-z][A-Za-z ]{0,39})", p_info_text)
+        en_name = m.group(1).strip() if m else ""
 
     id_copy_text = "".join(t for n, t in person_pages if "id_copy" in classify_page(t))
-    id_ok = (not id_no) or (_clean(id_no) in _clean(id_copy_text)) or (_clean(id_no) in _clean(pages_text))
-    card_ok = (not card_no) or (_clean(card_no) in _clean(id_copy_text))
-    name_ok = (not chinese_name) or (chinese_name in pages_text)
+    # 证件号码：只与证件复印件页比对（去掉整文档兜底，避免掩盖不一致）；
+    # 纯数字子串比对容忍 OCR 多识别字母/前导数字（如蓝卡号 N825441767 vs 25441767）
+    id_ok = (not id_no) or (_digits(id_no) in _digits(id_copy_text)) or (_clean(id_no) in _clean(id_copy_text))
+    card_ok = (not card_no) or (_digits(card_no) in _digits(id_copy_text)) or (_clean(card_no) in _clean(id_copy_text))
+    # 姓名双向比对：资料页中文名（繁简变体）须在证件页出现；
+    # 中文名因 OCR 识别不出时，英文名可作独立佐证（字母 OCR 更稳定）。
+    name_ok = True
+    if chinese_name:
+        if any(v in id_copy_text for v in name_variants(chinese_name)):
+            name_ok = True
+        elif en_name and _clean(en_name) in _clean(id_copy_text):
+            name_ok = True  # 中文名 OCR 变形，英文名佐证一致
+        else:
+            name_ok = False
     if id_ok and card_ok and name_ok:
         consistency = "姓名、证件号码、职安卡编号已与证件复印件自动比对一致（OCR 宽松识别）"
     else:
@@ -405,8 +522,22 @@ def check_person(name: str, person_pages: list[tuple[int, str]], names_all: list
         if not card_ok:
             detail.append("职安卡编号未在证件页找到")
         if not name_ok:
-            detail.append("中文姓名比对异常")
+            detail.append("资料页中文姓名未在证件页找到（英文名亦未对上），需人工核实是否填错")
         consistency = "需人工复核：" + "；".join(detail)
+
+    # 5. 证件有效期检查（打印内容）：通行证区间逐个判；逗留许可/职安卡
+    #    单日期取最晚值判（查询/签发日期已过滤，最晚即当前证件记录）
+    validity_text = id_copy_text + p_info_text
+    val = extract_validity(validity_text)
+    expired = []
+    for label, d in val:
+        if label == "通行证/签注有效期" and d < report_date:
+            expired.append(f"通行证/签注已于{d.isoformat()}到期")
+    single_dates = [d for label, d in val if label != "通行证/签注有效期"]
+    if single_dates and max(single_dates) < report_date:
+        expired.append(f"逗留许可/职安卡有效期已于{max(single_dates).isoformat()}到期")
+    if expired:
+        issues.append("；".join(expired) + f"（以报告日期 {report_date.isoformat()} 判断，请核实证件是否已更换）")
 
     # ---- 组装报告 ----
     if id_type == "macau_resident":
@@ -542,12 +673,14 @@ def main() -> int:
     if ranges is None:
         print("[错误] 无法按名单切分页面，请检查第1页名单与页面结构", file=sys.stderr)
         return 1
+    report_date = args.date or datetime.date.today().strftime("%Y-%m-%d")
+    report_date_obj = datetime.date.fromisoformat(report_date)
     for name, (s, e) in zip(names, ranges):
         person_pages = [(n, t) for n, t in pages if s <= n <= e]
         if not person_pages:
             print(f"  [提示] 未找到 {name} 的页面，跳过")
             continue
-        people.append(check_person(name, person_pages, names))
+        people.append(check_person(name, person_pages, names, report_date_obj))
         print(f"  已核验 {name}: 第{s}-{e}页, {len(people[-1]['issues'])} 项问题")
 
     if not people:
@@ -578,7 +711,6 @@ def main() -> int:
             company = "未命名"
         company_source = "organization.yaml 一包别名（字段未识别到可信公司名）"
     print(f"一包简称: {company}（来源：{company_source}）")
-    report_date = args.date or datetime.date.today().strftime("%Y-%m-%d")
     date_compact = report_date.replace("-", "")
 
     # 输出数据 JSON
