@@ -51,7 +51,13 @@ python main.py inputfile/样例_填写错误.pdf
 
 ## 扫描件 OCR
 
-如果 PDF 是扫描件（无文本层），先做 OCR：
+**自动识别（推荐）**：`main.py` / `开始核验.bat` 运行时会自动检测扫描件：
+
+- PDF 有文本层 → 直接核验，不 OCR；
+- 扫描件且 `.cache/ocr/<文件名>/` 已有完整缓存（页数一致）→ 直接使用缓存，不重新 OCR；
+- 扫描件且无缓存/缓存不完整 → 自动调用 OCR，完成后继续核验（耗时取决于页数，约 1 分钟/10 页）。
+
+手动 OCR（可选）：
 
 ```bash
 python tools/ocr_pdf.py inputfile/xxx.pdf
