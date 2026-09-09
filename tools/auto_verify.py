@@ -140,18 +140,20 @@ def repair_short_name(name: str, en_name: str, text: str) -> str:
     parts = en.split()
     en_first = parts[0] if parts else ""
     en_init = en_first[0] if en_first else ""
-    # 1) 文本内"姓氏+名"两字行候选
+    # 1) 文本内"姓氏+名"两字行候选（排除叠字/简繁重复 OCR 残片）
     cands = sorted({
         line.strip() for line in text.splitlines()
         if len(line.strip()) == 2 and line.strip()[1] == name
         and line.strip()[0] in _SURNAMES
+        and not (line.strip()[0] == line.strip()[1]
+                 or norm_text(line.strip()[0]) == norm_text(line.strip()[1]))
     })
     for cand in cands:
         s_py = _SURNAME_PY_INIT.get(cand[0], "")
         if en_init and s_py == en_init:
             return cand
-    if not en_init and len(cands) == 1:
-        return cands[0]
+    # 无英文名佐证时不采用候选（避免 OCR 残片被当名字，如"陳"→"陈陳"）；
+    # 宽松原则：修不了就保留原样，宁缺毋滥。
     # 3) 英文名首词 → 常见中文姓（启发式）
     if en_first and en_first in _EN_SURNAME:
         return _EN_SURNAME[en_first] + name
@@ -298,7 +300,102 @@ def is_name_on_pages(name: str, pages: list[tuple[int, str]], skip_pages: set[in
 
 # 统计表名单中的明显非人名词（职务/称呼/表头等，如"管理人员"），提取后直接剔除
 _NON_NAME_WORDS = ["管理", "负责", "联络", "跟进", "经理", "主任", "文员",
-                   "公司", "单位", "职务", "姓名", "序号", "人员"]
+                   "公司", "单位", "职务", "姓名", "序号", "人员", "电话"]
+
+
+# ============================================================================
+# 姓名多源提取（中文优先：资料页姓名栏 → 治安警申请表 → 证件区 → 英文兜底）
+# ============================================================================
+def _is_cn_name(cand: str) -> bool:
+    """是否为可信中文姓名：2-4 字、首字为常见姓氏、不含职务/表头杂质词。
+
+    额外排除叠字/简繁重复（如 OCR 残片"梁梁"、"陈陳"）——真实姓名罕见，
+    而 OCR 把长名拆成两字残片时常出现此特征，避免误当姓名；
+    以及"（中文及拼音）"字段残片（如"文及拼打"）混入。
+    """
+    if not (bool(re.fullmatch(r"[\u4e00-\u9fa5]{2,4}", cand))
+            and cand[0] in _SURNAMES
+            and not any(w in cand for w in _NON_NAME_WORDS)):
+        return False
+    if any(w in cand for w in ("及", "拼", "音")):
+        return False
+    return len(set(norm_text(cand))) == len(cand)
+
+
+def extract_cn_around_label(text: str, label: str = "中文", radius: int = 4) -> str:
+    """在"（中文）"标签上下 radius 行内找 2-4 字常见姓氏中文名。
+
+    OCR 行序常乱（实测："孙佳朋"整行跑到"（中文）"标签前、"张颂超"在
+    "（英文）"标签后），且常见"标签与姓名同行"（如"：(中文)李路"）。
+    因此：优先取标签同行的姓名，其次取标签上下附近的中文名。
+    """
+    lines = text.splitlines()
+    for i, ln in enumerate(lines):
+        if re.search(r"[（(]\s*" + label + r"\s*[）)]", ln):
+            lo, hi = max(0, i - radius), min(len(lines), i + radius + 1)
+            for j in range(lo, hi):
+                line = lines[j].strip()
+                # ① 标签与姓名同行："（中文）李路" / "：(中文)王波" → 取标签后中文
+                m_lbl = re.search(
+                    r"[（(]\s*" + label + r"\s*[）)]\s*[:：]?\s*([\u4e00-\u9fa5]{1,6})",
+                    line)
+                if m_lbl and _is_cn_name(m_lbl.group(1)):
+                    return m_lbl.group(1)
+                # ② 标签附近独立中文行（行序乱时）
+                cand = line.strip("：:()（）\t ")
+                if _is_cn_name(cand):
+                    return cand
+    return ""
+
+
+def extract_en_name(text: str) -> str:
+    """提取英文姓名（资料页"（英文）"、职安卡"姓名 Nome"、治安警申请表拼音）。"""
+    for pat in (
+        r"[（(]\s*英文\s*[）)]\s*[:：]?\s*([A-Za-z][A-Za-z .]{1,29})",
+        r"僱員姓名（中文及拼音[^\n]*）\s*[\u4e00-\u9fa5]{2,4}([A-Z][A-Z .]{1,29})",
+        r"姓名\s*Nome\s*[:：]?\s*([A-Z][A-Z .]{1,29})",
+    ):
+        m = re.search(pat, text)
+        if m:
+            en = m.group(1).strip()
+            if re.fullmatch(r"[A-Za-z][A-Za-z .]{1,29}", en) and not re.search(r"\d", en):
+                return en
+    return ""
+
+
+def extract_person_name(person_text: str, info_text: str) -> str | None:
+    """从一个人的全部页面文本多源提取姓名，中文优先、英文兜底。
+
+    来源优先级（中文）：①资料页"（中文）"姓名栏（标签附近容错）→
+    ②治安警申请表"僱員姓名（中文及拼音/外文）" → ③证件区"姓名/Nome"附近
+    （职安卡/澳门身份证/往来港澳通行证，排除紧急联络人姓名）→ ④英文名兜底。
+    返回 None 表示未提取到，由调用方回退单字提取 + 上下文补全。
+    """
+    # ① 资料页"（中文）"姓名栏（OCR 行序乱时取标签附近中文名）
+    name = extract_cn_around_label(info_text)
+    if name:
+        return name
+    # ② 治安警察局申请表"僱員姓名（中文及拼音/外文）"
+    m = re.search(r"僱員姓名（中文及拼音[^\n]*）\s*([\u4e00-\u9fa5]{2,4})", person_text)
+    if m and _is_cn_name(m.group(1)):
+        return m.group(1)
+    # ③ 证件区"姓名"附近中文（职安卡/身份证/通行证，排除"紧急联络人姓名"等）
+    for line in person_text.splitlines():
+        if "联络人" in line or "联系人" in line or "姓名" not in line:
+            continue
+        m = re.search(r"姓名\s*[:：]?\s*([\u4e00-\u9fa5]{2,4})", line)
+        if m and _is_cn_name(m.group(1)):
+            return m.group(1)
+    # ③.5 资料页"（中文）"字段直接取（1-6 字；OCR 常"标签与姓名同行"，
+    #     如"（中文）李路"，须取全名而不是单字；单字（如"（中文）將"）交调用方补全）
+    m = re.search(r"[（(]\s*中文\s*[）)]\s*[:：]?\s*([\u4e00-\u9fa5]{1,6})", info_text)
+    if m:
+        return m.group(1)
+    # ④ 英文兜底（比"人员{N}"占位符好）
+    en = extract_en_name(person_text)
+    if en:
+        return en
+    return None
 
 
 def _same_person(a: str, b: str) -> bool:
@@ -784,19 +881,22 @@ def process_one_pdf(pdf_path: Path, args) -> int:
         if person_starts:
             for i, s in enumerate(person_starts):
                 t = next(t for n, t in pages if n == s)
-                m = re.search(
-                    r"[（(]\s*中文\s*[）)]\s*[:：]?\s*"
-                    r"([\u4e00-\u9fa5]{1,6}|[A-Za-z][A-Za-z ]{1,29})",
-                    t)
-                name = m.group(1).strip() if m else f"人员{s}"
+                end = (person_starts[i + 1] - 1) if i + 1 < len(person_starts) else pages[-1][0]
+                scope_text = "".join(tt for n, tt in pages if s <= n <= end)
+                name = extract_person_name(scope_text, t)
+                if not name:
+                    # 多源提取失败：资料页"（中文）"直接取（允许 1 字），再上下文补全
+                    m = re.search(
+                        r"[（(]\s*中文\s*[）)]\s*[:：]?\s*"
+                        r"([\u4e00-\u9fa5]{1}|[A-Za-z][A-Za-z ]{1,29})",
+                        t)
+                    name = m.group(1).strip() if m else f"人员{s}"
                 # OCR 丢姓氏修复：单字名按上下文（英文名/文档内"姓氏+名"）补全
                 if re.fullmatch(r"[\u4e00-\u9fa5]{1}", name):
-                    end = (person_starts[i + 1] - 1) if i + 1 < len(person_starts) else pages[-1][0]
-                    scope = "".join(tt for n, tt in pages if s <= n <= end)
                     m_en = re.search(
                         r"[（(]\s*英文\s*[）)]\s*[:：]?\s*([A-Za-z][A-Za-z ]{1,29})",
                         t)
-                    repaired = repair_short_name(name, m_en.group(1) if m_en else "", scope)
+                    repaired = repair_short_name(name, m_en.group(1) if m_en else "", scope_text)
                     if repaired != name:
                         print(f"  [修复] 资料页中文名'{name}'按上下文补全为'{repaired}'")
                     name = repaired
